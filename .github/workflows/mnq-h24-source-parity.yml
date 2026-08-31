@@ -1,0 +1,60 @@
+name: mnq-h24-source-parity
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact research harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
+          git -C harness checkout --detach d1e739fd43b08e1e6868d67c53c9b1f59e8a9d9d
+          test "$(git -C harness rev-parse HEAD)" = "d1e739fd43b08e1e6868d67c53c9b1f59e8a9d9d"
+
+      - name: Checkout exact deep MNQ source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/mbytes21/MNQ_DATA.git deep
+          git -C deep checkout --detach fc5508e2c152938d6d9eb70a36b888ae26107176
+          test "$(git -C deep rev-parse HEAD)" = "fc5508e2c152938d6d9eb70a36b888ae26107176"
+
+      - name: Checkout exact AXB source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/axb0306/cme-futures-ohlc.git axb
+          git -C axb checkout --detach 60abd3fb6369c6ce0b6a4a65b0f2562fc96b1264
+          test "$(git -C axb rev-parse HEAD)" = "60abd3fb6369c6ce0b6a4a65b0f2562fc96b1264"
+
+      - name: Install bounded dependencies
+        run: python -m pip install --disable-pip-version-check -q pandas numpy scikit-learn
+
+      - name: Execute same-timestamp parity plus later extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          cd harness
+          python -m research.mnq_h24_source_parity \
+            --deep-root ../deep/plaintext_csv \
+            --axb-root ../axb \
+            --output ../result/mnq-h24-source-parity.json
+
+      - name: Upload metrics only
+        uses: actions/upload-artifact@v4
+        with:
+          name: mnq-h24-source-parity
+          path: result/mnq-h24-source-parity.json
+          if-no-files-found: error
+          retention-days: 30
