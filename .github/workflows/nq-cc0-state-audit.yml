@@ -1,0 +1,91 @@
+name: nq-cc0-state-transition-audit
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact state-audit harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
+          git -C harness checkout --detach 5dea828738684ad21a1f1a46c94ed492dac19237
+          test "$(git -C harness rev-parse HEAD)" = "5dea828738684ad21a1f1a46c94ed492dac19237"
+
+      - name: Fetch frozen multi-year receipts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p receipts source result
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            /repos/XoticHaze/GlueGun/actions/artifacts/9751835018/zip \
+            > receipts.zip
+          test "$(sha256sum receipts.zip | awk '{print $1}')" = "ec42103ffd79cf36c72d20eef29fb2545791c778859c91515bcfe5a6524bf9eb"
+          unzip -q receipts.zip -d receipts
+          test -f receipts/nq-cc0-multiyear-h12_vol10.json
+          test -f receipts/nq-cc0-multiyear-h24_vol05.json
+          grep -q '"receipt_sha256": "758e2787430791d2173cb17c914fd8b807eaf83bf944b6a601bec74bd82b22ed"' receipts/nq-cc0-multiyear-h12_vol10.json
+          grep -q '"receipt_sha256": "e8eb7e232b00de3b9af1b2ec9c028efe27ca4b404eade3edfa904aaf8320f32f"' receipts/nq-cc0-multiyear-h24_vol05.json
+
+      - name: Download exact public-domain NQ source
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://www.kaggle.com/api/v1/datasets/download/tgtanalytics/nq-futures-1min-bar-2022-2025'
+          curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 "$url" -o source/nq-cc0.zip
+          unzip -q source/nq-cc0.zip -d source/unpacked
+          mapfile -t csvs < <(find source/unpacked -type f -iname '*.csv' -print)
+          test "${#csvs[@]}" -eq 1
+          cp "${csvs[0]}" source/Dataset_NQ_1min_2022_2025.csv
+          test "$(sha256sum source/Dataset_NQ_1min_2022_2025.csv | awk '{print $1}')" = "1577e60a7feab411e49da7a56c7052a64738cd1757cfd60aa11fd783ff43b60b"
+
+      - name: Install bounded dependencies
+        run: python -m pip install --disable-pip-version-check -q pandas numpy scikit-learn
+
+      - name: Normalize source deterministically
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd harness
+          python -m research.nq_cc0_corpus_audit \
+            --input ../source/Dataset_NQ_1min_2022_2025.csv \
+            --output-json ../result/nq-cc0-corpus-audit.json \
+            --output-normalized ../result/nq-cc0-normalized-utc.csv.gz
+          grep -q '"utc_duplicate_rows": 0' ../result/nq-cc0-corpus-audit.json
+
+      - name: Describe pre-week state for both training-memory arms
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd harness
+          for arm in expanding_nq rolling_90d_nq; do
+            python -m research.nq_cc0_state_transition_audit \
+              --nq-normalized ../result/nq-cc0-normalized-utc.csv.gz \
+              --h12-receipt ../receipts/nq-cc0-multiyear-h12_vol10.json \
+              --h24-receipt ../receipts/nq-cc0-multiyear-h24_vol05.json \
+              --arm "$arm" \
+              --output "../result/nq-state-${arm}.json"
+          done
+
+      - name: Upload descriptive state receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nq-cc0-state-transition-receipts
+          path: |
+            result/nq-state-expanding_nq.json
+            result/nq-state-rolling_90d_nq.json
+          if-no-files-found: error
+          retention-days: 30
