@@ -1,0 +1,73 @@
+name: nq-weekly-context-ablation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [h12_vol10, h24_vol05]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact research harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
+          git -C harness checkout --detach 1af22f6226d437d5b7067b076f18a9461dbae62e
+          test "$(git -C harness rev-parse HEAD)" = "1af22f6226d437d5b7067b076f18a9461dbae62e"
+
+      - name: Download frozen CC0 NQ source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source result
+          curl --fail --location --retry 4 --retry-all-errors \
+            'https://www.kaggle.com/api/v1/datasets/download/tgtanalytics/nq-futures-1min-bar-2022-2025' \
+            -o source/nq.zip
+          unzip -q source/nq.zip -d source/unpacked
+          mapfile -t csvs < <(find source/unpacked -type f -iname '*.csv' -print)
+          test "${#csvs[@]}" -eq 1
+          cp "${csvs[0]}" source/nq.csv
+          test "$(sha256sum source/nq.csv | awk '{print $1}')" = "1577e60a7feab411e49da7a56c7052a64738cd1757cfd60aa11fd783ff43b60b"
+
+      - name: Install bounded dependencies
+        run: python -m pip install --disable-pip-version-check -q pandas numpy scikit-learn
+
+      - name: Normalize source causally
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd harness
+          python -m research.nq_cc0_corpus_audit \
+            --input ../source/nq.csv \
+            --output-json ../result/audit.json \
+            --output-normalized ../result/nq-normalized.csv.gz
+
+      - name: Execute prior-week context ablation
+        shell: bash
+        env:
+          CONFIG_KEY: ${{ matrix.config }}
+        run: |
+          set -euo pipefail
+          cd harness
+          python -m research.nq_weekly_context_ablation \
+            --config-key "$CONFIG_KEY" \
+            --nq-normalized ../result/nq-normalized.csv.gz \
+            --output "../result/${CONFIG_KEY}.json"
+
+      - name: Upload metrics only
+        uses: actions/upload-artifact@v4
+        with:
+          name: nq-weekly-context-${{ matrix.config }}
+          path: result/${{ matrix.config }}.json
+          if-no-files-found: error
+          retention-days: 30
