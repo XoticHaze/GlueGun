@@ -1,4 +1,4 @@
-name: mnq-nq-transfer
+name: mnq-nq-domain-adaptation
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  transfer:
+  adapt:
     strategy:
       fail-fast: false
       matrix:
@@ -22,31 +22,33 @@ jobs:
         run: |
           set -euo pipefail
           git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
-          git -C harness checkout --detach e86be991b6b82e632315cfb512615dd0fbf590cc
-          test "$(git -C harness rev-parse HEAD)" = "e86be991b6b82e632315cfb512615dd0fbf590cc"
+          git -C harness checkout --detach c8b26a395ec3120888dd0e152a723186376b4261
+          test "$(git -C harness rev-parse HEAD)" = "c8b26a395ec3120888dd0e152a723186376b4261"
       - name: Checkout exact deep MNQ source
         shell: bash
         run: |
           set -euo pipefail
           git clone --filter=blob:none https://github.com/mbytes21/MNQ_DATA.git deep
           git -C deep checkout --detach fc5508e2c152938d6d9eb70a36b888ae26107176
+          test "$(git -C deep rev-parse HEAD)" = "fc5508e2c152938d6d9eb70a36b888ae26107176"
       - name: Checkout exact public NQ source
         shell: bash
         run: |
           set -euo pipefail
           git clone --filter=blob:none https://github.com/axb0306/cme-futures-ohlc.git axb
           git -C axb checkout --detach 60abd3fb6369c6ce0b6a4a65b0f2562fc96b1264
+          test "$(git -C axb rev-parse HEAD)" = "60abd3fb6369c6ce0b6a4a65b0f2562fc96b1264"
           test -f axb/NQ/NQ_1min_20260120_20260415.csv
       - name: Install bounded dependencies
         run: python -m pip install --disable-pip-version-check -q pandas numpy scikit-learn
-      - name: Execute frozen market transfer
+      - name: Execute fixed NQ domain adaptation ladder
         env:
           CONFIG_KEY: ${{ matrix.config }}
         shell: bash
         run: |
           set -euo pipefail
           cd harness
-          python -m research.mnq_to_nq_transfer \
+          python -m research.mnq_nq_domain_adaptation \
             --config-key "$CONFIG_KEY" \
             --deep-root ../deep/plaintext_csv \
             --nq-csv ../axb/NQ/NQ_1min_20260120_20260415.csv \
@@ -54,7 +56,7 @@ jobs:
       - name: Upload metrics only
         uses: actions/upload-artifact@v4
         with:
-          name: mnq-to-nq-${{ matrix.config }}
+          name: mnq-nq-domain-${{ matrix.config }}
           path: result/${{ matrix.config }}.json
           if-no-files-found: error
           retention-days: 14
