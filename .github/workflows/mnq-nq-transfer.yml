@@ -1,4 +1,4 @@
-name: mnq-nq-domain-adaptation
+name: mnq-nq-pooled-nonoverlap-validation
 
 on:
   pull_request:
@@ -9,11 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  adapt:
-    strategy:
-      fail-fast: false
-      matrix:
-        config: [h12_vol10, h24_vol05]
+  validate:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -22,8 +18,8 @@ jobs:
         run: |
           set -euo pipefail
           git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
-          git -C harness checkout --detach c8b26a395ec3120888dd0e152a723186376b4261
-          test "$(git -C harness rev-parse HEAD)" = "c8b26a395ec3120888dd0e152a723186376b4261"
+          git -C harness checkout --detach a3237a3237f95038e14c553a43ad54a0d1cd74e9
+          test "$(git -C harness rev-parse HEAD)" = "a3237a3237f95038e14c553a43ad54a0d1cd74e9"
       - name: Checkout exact deep MNQ source
         shell: bash
         run: |
@@ -41,22 +37,19 @@ jobs:
           test -f axb/NQ/NQ_1min_20260120_20260415.csv
       - name: Install bounded dependencies
         run: python -m pip install --disable-pip-version-check -q pandas numpy scikit-learn
-      - name: Execute fixed NQ domain adaptation ladder
-        env:
-          CONFIG_KEY: ${{ matrix.config }}
+      - name: Execute multi-window non-overlap validation
         shell: bash
         run: |
           set -euo pipefail
           cd harness
-          python -m research.mnq_nq_domain_adaptation \
-            --config-key "$CONFIG_KEY" \
+          python -m research.mnq_nq_pooled_nonoverlap_validation \
             --deep-root ../deep/plaintext_csv \
             --nq-csv ../axb/NQ/NQ_1min_20260120_20260415.csv \
-            --output "../result/${CONFIG_KEY}.json"
+            --output ../result/mnq-nq-pooled-nonoverlap.json
       - name: Upload metrics only
         uses: actions/upload-artifact@v4
         with:
-          name: mnq-nq-domain-${{ matrix.config }}
-          path: result/${{ matrix.config }}.json
+          name: mnq-nq-pooled-nonoverlap
+          path: result/mnq-nq-pooled-nonoverlap.json
           if-no-files-found: error
           retention-days: 14
