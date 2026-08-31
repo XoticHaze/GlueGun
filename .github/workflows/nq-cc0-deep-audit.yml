@@ -1,4 +1,4 @@
-name: nq-cc0-deep-corpus-audit
+name: nq-cc0-deep-validation
 
 on:
   pull_request:
@@ -9,19 +9,19 @@ permissions:
   contents: read
 
 jobs:
-  audit:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - name: Checkout exact research harness
         shell: bash
         run: |
           set -euo pipefail
           git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
-          git -C harness checkout --detach 71e7a15953e39f715932aee524023c9e2adab61c
-          test "$(git -C harness rev-parse HEAD)" = "71e7a15953e39f715932aee524023c9e2adab61c"
+          git -C harness checkout --detach 18eb7314a17065c20c775992348acea6600e8d0f
+          test "$(git -C harness rev-parse HEAD)" = "18eb7314a17065c20c775992348acea6600e8d0f"
 
-      - name: Download public-domain NQ corpus
+      - name: Download frozen public-domain NQ corpus
         shell: bash
         run: |
           set -euo pipefail
@@ -29,15 +29,15 @@ jobs:
           url='https://www.kaggle.com/api/v1/datasets/download/tgtanalytics/nq-futures-1min-bar-2022-2025'
           curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 "$url" -o source/nq-cc0.zip
           sha256sum source/nq-cc0.zip | tee result/source-archive.sha256
-          unzip -l source/nq-cc0.zip
           unzip -q source/nq-cc0.zip -d source/unpacked
           mapfile -t csvs < <(find source/unpacked -type f -iname '*.csv' -print)
           test "${#csvs[@]}" -eq 1
           cp "${csvs[0]}" source/Dataset_NQ_1min_2022_2025.csv
+          test "$(sha256sum source/Dataset_NQ_1min_2022_2025.csv | awk '{print $1}')" = "1577e60a7feab411e49da7a56c7052a64738cd1757cfd60aa11fd783ff43b60b"
           wc -l source/Dataset_NQ_1min_2022_2025.csv
 
       - name: Install bounded dependencies
-        run: python -m pip install --disable-pip-version-check -q pandas numpy
+        run: python -m pip install --disable-pip-version-check -q pandas numpy scikit-learn
 
       - name: Audit and normalize ET to UTC
         shell: bash
@@ -48,21 +48,28 @@ jobs:
             --input ../source/Dataset_NQ_1min_2022_2025.csv \
             --output-json ../result/nq-cc0-corpus-audit.json \
             --output-normalized ../result/nq-cc0-normalized-utc.csv.gz
+          grep -q '"normalized_sha256": "ec9102432209c9d3c4d08c444803e6b8ec678a6fff54fd85f63de77a0445a2a2"' ../result/nq-cc0-corpus-audit.json
 
-      - name: Upload immutable audit receipt
+      - name: Execute multi-year adaptive NQ walk-forward
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd harness
+          for cfg in h12_vol10 h24_vol05; do
+            python -m research.nq_cc0_multiyear_validation \
+              --config-key "$cfg" \
+              --nq-normalized ../result/nq-cc0-normalized-utc.csv.gz \
+              --output "../result/nq-cc0-multiyear-${cfg}.json"
+          done
+
+      - name: Upload immutable research receipts
         uses: actions/upload-artifact@v4
         with:
-          name: nq-cc0-corpus-audit
+          name: nq-cc0-multiyear-receipts
           path: |
             result/nq-cc0-corpus-audit.json
             result/source-archive.sha256
+            result/nq-cc0-multiyear-h12_vol10.json
+            result/nq-cc0-multiyear-h24_vol05.json
           if-no-files-found: error
           retention-days: 30
-
-      - name: Upload normalized CC0 research corpus
-        uses: actions/upload-artifact@v4
-        with:
-          name: nq-cc0-normalized-utc
-          path: result/nq-cc0-normalized-utc.csv.gz
-          if-no-files-found: error
-          retention-days: 14
