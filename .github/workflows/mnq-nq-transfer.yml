@@ -1,4 +1,4 @@
-name: mnq-nq-pooled-nonoverlap-validation
+name: mnq-nq-pooled-nonoverlap-weekly
 
 on:
   pull_request:
@@ -10,6 +10,10 @@ permissions:
 
 jobs:
   validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [h12_vol10, h24_vol05]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -18,8 +22,8 @@ jobs:
         run: |
           set -euo pipefail
           git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
-          git -C harness checkout --detach a3237a3237f95038e14c553a43ad54a0d1cd74e9
-          test "$(git -C harness rev-parse HEAD)" = "a3237a3237f95038e14c553a43ad54a0d1cd74e9"
+          git -C harness checkout --detach 8dc41db19e467e44138d29a03459701eedc964b7
+          test "$(git -C harness rev-parse HEAD)" = "8dc41db19e467e44138d29a03459701eedc964b7"
       - name: Checkout exact deep MNQ source
         shell: bash
         run: |
@@ -37,19 +41,22 @@ jobs:
           test -f axb/NQ/NQ_1min_20260120_20260415.csv
       - name: Install bounded dependencies
         run: python -m pip install --disable-pip-version-check -q pandas numpy scikit-learn
-      - name: Execute multi-window non-overlap validation
+      - name: Execute weekly non-overlap validation
+        env:
+          CONFIG_KEY: ${{ matrix.config }}
         shell: bash
         run: |
           set -euo pipefail
           cd harness
           python -m research.mnq_nq_pooled_nonoverlap_validation \
+            --config-key "$CONFIG_KEY" \
             --deep-root ../deep/plaintext_csv \
             --nq-csv ../axb/NQ/NQ_1min_20260120_20260415.csv \
-            --output ../result/mnq-nq-pooled-nonoverlap.json
+            --output "../result/${CONFIG_KEY}.json"
       - name: Upload metrics only
         uses: actions/upload-artifact@v4
         with:
-          name: mnq-nq-pooled-nonoverlap
-          path: result/mnq-nq-pooled-nonoverlap.json
+          name: mnq-nq-weekly-${{ matrix.config }}
+          path: result/${{ matrix.config }}.json
           if-no-files-found: error
           retention-days: 14
