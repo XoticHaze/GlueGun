@@ -1,0 +1,73 @@
+name: nq-cc0-confidence-tail-validation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [h12_vol10, h24_vol05]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact confidence harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
+          git -C harness checkout --detach 4e17581eda75d0593afe20d131f3f5ee31edf4e4
+          test "$(git -C harness rev-parse HEAD)" = "4e17581eda75d0593afe20d131f3f5ee31edf4e4"
+
+      - name: Download exact public-domain NQ source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source result
+          url='https://www.kaggle.com/api/v1/datasets/download/tgtanalytics/nq-futures-1min-bar-2022-2025'
+          curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 "$url" -o source/nq-cc0.zip
+          unzip -q source/nq-cc0.zip -d source/unpacked
+          mapfile -t csvs < <(find source/unpacked -type f -iname '*.csv' -print)
+          test "${#csvs[@]}" -eq 1
+          cp "${csvs[0]}" source/Dataset_NQ_1min_2022_2025.csv
+          test "$(sha256sum source/Dataset_NQ_1min_2022_2025.csv | awk '{print $1}')" = "1577e60a7feab411e49da7a56c7052a64738cd1757cfd60aa11fd783ff43b60b"
+
+      - name: Install bounded dependencies
+        run: python -m pip install --disable-pip-version-check -q pandas numpy scikit-learn
+
+      - name: Normalize exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd harness
+          python -m research.nq_cc0_corpus_audit \
+            --input ../source/Dataset_NQ_1min_2022_2025.csv \
+            --output-json ../result/nq-cc0-corpus-audit.json \
+            --output-normalized ../result/nq-cc0-normalized-utc.csv.gz
+          grep -q '"utc_duplicate_rows": 0' ../result/nq-cc0-corpus-audit.json
+
+      - name: Execute nested confidence-tail validation
+        env:
+          CONFIG_KEY: ${{ matrix.config }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd harness
+          python -m research.nq_cc0_confidence_validation \
+            --config-key "$CONFIG_KEY" \
+            --nq-normalized ../result/nq-cc0-normalized-utc.csv.gz \
+            --output "../result/nq-confidence-${CONFIG_KEY}.json"
+
+      - name: Upload immutable confidence receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: nq-confidence-${{ matrix.config }}
+          path: result/nq-confidence-${{ matrix.config }}.json
+          if-no-files-found: error
+          retention-days: 30
