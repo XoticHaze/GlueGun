@@ -22,8 +22,8 @@ jobs:
         run: |
           set -euo pipefail
           git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
-          git -C harness checkout --detach 2ca00e6aceecde7beeb5e56a65045c76642dccd1
-          test "$(git -C harness rev-parse HEAD)" = "2ca00e6aceecde7beeb5e56a65045c76642dccd1"
+          git -C harness checkout --detach c03d48141a00e17613ec2e6260d597f1491a9f11
+          test "$(git -C harness rev-parse HEAD)" = "c03d48141a00e17613ec2e6260d597f1491a9f11"
 
       - name: Checkout exact deep MNQ source
         shell: bash
