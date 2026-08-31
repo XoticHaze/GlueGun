@@ -1,0 +1,65 @@
+name: mnq-expected-move-forward-timefixed
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [h12_vol10, h24_vol05]
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout exact timestamp-corrected forward harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
+          git -C harness checkout --detach 6aa9c0e5c573d3eaf6ce24feb25a6830212b1396
+          test "$(git -C harness rev-parse HEAD)" = "6aa9c0e5c573d3eaf6ce24feb25a6830212b1396"
+
+      - name: Checkout exact deep MNQ source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/mbytes21/MNQ_DATA.git deep
+          git -C deep checkout --detach fc5508e2c152938d6d9eb70a36b888ae26107176
+          test "$(git -C deep rev-parse HEAD)" = "fc5508e2c152938d6d9eb70a36b888ae26107176"
+
+      - name: Install bounded dependencies
+        run: python -m pip install --disable-pip-version-check -q pandas numpy scikit-learn tzdata
+
+      - name: Execute frozen 2026 timestamp-corrected proof
+        shell: bash
+        env:
+          CONFIG_KEY: ${{ matrix.config }}
+        run: |
+          set -uo pipefail
+          mkdir -p result
+          cd harness
+          python -m research.mnq_expected_move_forward_2026_timefixed \
+            --config-key "$CONFIG_KEY" \
+            --deep-root ../deep/plaintext_csv \
+            --output "../result/${CONFIG_KEY}.json" \
+            2>&1 | tee "../result/${CONFIG_KEY}.log"
+          rc=${PIPESTATUS[0]}
+          echo "FORWARD_TIMEFIXED_EXIT_CODE=$rc" | tee -a "../result/${CONFIG_KEY}.log"
+          exit "$rc"
+
+      - name: Upload metrics and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mnq-expected-move-forward-timefixed-${{ matrix.config }}
+          path: |
+            result/${{ matrix.config }}.json
+            result/${{ matrix.config }}.log
+          if-no-files-found: error
+          retention-days: 30
