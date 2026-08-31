@@ -1,0 +1,68 @@
+name: nq-cc0-deep-corpus-audit
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact research harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/XoticHaze/TextConverterToolbox.git harness
+          git -C harness checkout --detach 71e7a15953e39f715932aee524023c9e2adab61c
+          test "$(git -C harness rev-parse HEAD)" = "71e7a15953e39f715932aee524023c9e2adab61c"
+
+      - name: Download public-domain NQ corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source result
+          url='https://www.kaggle.com/api/v1/datasets/download/tgtanalytics/nq-futures-1min-bar-2022-2025'
+          curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 "$url" -o source/nq-cc0.zip
+          sha256sum source/nq-cc0.zip | tee result/source-archive.sha256
+          unzip -l source/nq-cc0.zip
+          unzip -q source/nq-cc0.zip -d source/unpacked
+          mapfile -t csvs < <(find source/unpacked -type f -iname '*.csv' -print)
+          test "${#csvs[@]}" -eq 1
+          cp "${csvs[0]}" source/Dataset_NQ_1min_2022_2025.csv
+          wc -l source/Dataset_NQ_1min_2022_2025.csv
+
+      - name: Install bounded dependencies
+        run: python -m pip install --disable-pip-version-check -q pandas numpy
+
+      - name: Audit and normalize ET to UTC
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd harness
+          python -m research.nq_cc0_corpus_audit \
+            --input ../source/Dataset_NQ_1min_2022_2025.csv \
+            --output-json ../result/nq-cc0-corpus-audit.json \
+            --output-normalized ../result/nq-cc0-normalized-utc.csv.gz
+
+      - name: Upload immutable audit receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: nq-cc0-corpus-audit
+          path: |
+            result/nq-cc0-corpus-audit.json
+            result/source-archive.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload normalized CC0 research corpus
+        uses: actions/upload-artifact@v4
+        with:
+          name: nq-cc0-normalized-utc
+          path: result/nq-cc0-normalized-utc.csv.gz
+          if-no-files-found: error
+          retention-days: 14
