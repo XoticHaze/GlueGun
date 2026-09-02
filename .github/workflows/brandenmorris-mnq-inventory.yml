@@ -1,0 +1,73 @@
+name: Branden Morris MNQ dataset inventory
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/brandenmorris-mnq-inventory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Query Kaggle public dataset API
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python - <<'PY' | tee artifacts/inventory.log
+          import json, urllib.parse, urllib.request
+          from pathlib import Path
+
+          base='https://www.kaggle.com/api/v1/datasets/list'
+          params={'user':'brandenmorris','page':'1','pageSize':'100','sortBy':'updated'}
+          url=base+'?'+urllib.parse.urlencode(params)
+          with urllib.request.urlopen(url, timeout=30) as r:
+              rows=json.loads(r.read().decode('utf-8'))
+          if not isinstance(rows,list):
+              raise SystemExit('unexpected Kaggle API payload')
+          mnq=[]
+          for row in rows:
+              ref=str(row.get('ref') or '')
+              title=str(row.get('title') or '')
+              subtitle=str(row.get('subtitle') or '')
+              if 'mnq' in (ref+' '+title+' '+subtitle).lower():
+                  mnq.append({
+                      'ref':ref,
+                      'title':title,
+                      'subtitle':subtitle,
+                      'lastUpdated':row.get('lastUpdated'),
+                      'downloadCount':row.get('downloadCount'),
+                      'totalBytes':row.get('totalBytes'),
+                      'licenseName':row.get('licenseName'),
+                      'url':row.get('url'),
+                  })
+          receipt={
+              'schema':'research_runner.kaggle_author_mnq_inventory.v1',
+              'author':'brandenmorris',
+              'api_url':url,
+              'total_author_datasets':len(rows),
+              'mnq_datasets':mnq,
+              'research_only':True,
+          }
+          Path('artifacts/receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          print('KAGGLE_AUTHOR_INVENTORY=PASS')
+          print('TOTAL_AUTHOR_DATASETS='+str(len(rows)))
+          print('MNQ_DATASET_COUNT='+str(len(mnq)))
+          for item in mnq:
+              print(json.dumps(item,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: brandenmorris-mnq-inventory
+          path: |
+            artifacts/receipt.json
+            artifacts/inventory.log
+          if-no-files-found: error
+          retention-days: 30

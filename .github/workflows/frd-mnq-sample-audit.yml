@@ -1,0 +1,141 @@
+name: FRD MNQ sample audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/frd-mnq-sample-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch exact public FRD MNQ sample
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source artifacts
+          curl --fail --location --retry 3 --retry-delay 2 \
+            'https://frd001.s3.us-east-2.amazonaws.com/frd_sample_futures_MNQ.zip' \
+            -o source/frd_sample_futures_MNQ.zip
+          sha256sum source/frd_sample_futures_MNQ.zip | tee artifacts/zip.sha256
+          unzip -l source/frd_sample_futures_MNQ.zip | tee artifacts/zip-list.txt
+          unzip -q source/frd_sample_futures_MNQ.zip -d source/extracted
+      - name: Audit contained files and timestamp coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee artifacts/audit.log
+          from __future__ import annotations
+          import csv, json, re
+          from pathlib import Path
+          from datetime import datetime
+
+          root = Path('source/extracted')
+          files = sorted(p for p in root.rglob('*') if p.is_file())
+          out = []
+
+          def parse_ts(token: str):
+              s = token.strip().strip('"')
+              for fmt in (
+                  '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M',
+                  '%Y%m%d %H%M%S', '%Y%m%d %H%M',
+                  '%m/%d/%Y %H:%M:%S', '%m/%d/%Y %H:%M',
+              ):
+                  try:
+                      return datetime.strptime(s, fmt)
+                  except ValueError:
+                      pass
+              try:
+                  return datetime.fromisoformat(s.replace('Z', '+00:00'))
+              except Exception:
+                  return None
+
+          for path in files:
+              rec = {'path': path.relative_to(root).as_posix(), 'bytes': path.stat().st_size}
+              if path.suffix.lower() not in {'.csv', '.txt'}:
+                  rec['kind'] = 'non_tabular'
+                  out.append(rec)
+                  continue
+              rec['kind'] = 'tabular'
+              first = last = None
+              rows = 0
+              sample = []
+              with path.open('r', encoding='utf-8-sig', errors='replace', newline='') as fh:
+                  for raw in fh:
+                      line = raw.strip()
+                      if not line:
+                          continue
+                      if len(sample) < 3:
+                          sample.append(line[:300])
+                      parts = re.split(r'[,;\t]', line)
+                      candidates = [parts[0]]
+                      if len(parts) > 1:
+                          candidates.append(parts[0] + ' ' + parts[1])
+                      ts = next((parse_ts(c) for c in candidates if parse_ts(c) is not None), None)
+                      if ts is None:
+                          continue
+                      rows += 1
+                      first = ts if first is None or ts < first else first
+                      last = ts if last is None or ts > last else last
+              rec.update({
+                  'parsed_rows': rows,
+                  'first_timestamp': first.isoformat() if first else None,
+                  'last_timestamp': last.isoformat() if last else None,
+                  'sample_lines': sample,
+              })
+              out.append(rec)
+
+          windows = {
+              'gap_2022': ('2022-09-08T00:00:00', '2022-11-16T23:59:59'),
+              'gap_2025': ('2025-11-12T00:00:00', '2025-12-11T23:59:59'),
+          }
+          coverage = {}
+          for key, (start_s, end_s) in windows.items():
+              start, end = datetime.fromisoformat(start_s), datetime.fromisoformat(end_s)
+              hits = []
+              for rec in out:
+                  if not rec.get('first_timestamp') or not rec.get('last_timestamp'):
+                      continue
+                  first = datetime.fromisoformat(rec['first_timestamp']).replace(tzinfo=None)
+                  last = datetime.fromisoformat(rec['last_timestamp']).replace(tzinfo=None)
+                  if last >= start and first <= end:
+                      hits.append(rec['path'])
+              coverage[key] = hits
+
+          receipt = {
+              'schema': 'research_runner.frd_mnq_public_sample_audit.v1',
+              'source_url': 'https://frd001.s3.us-east-2.amazonaws.com/frd_sample_futures_MNQ.zip',
+              'product_page': 'https://firstratedata.com/i/futures/MNQ',
+              'files': out,
+              'residual_window_candidate_files': coverage,
+              'research_only': True,
+              'admission_authority': False,
+          }
+          Path('artifacts/receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+          print('FRD_MNQ_SAMPLE_AUDIT=PASS')
+          print('FILES=' + str(len(out)))
+          print('RESIDUAL_WINDOW_CANDIDATES=' + json.dumps(coverage, sort_keys=True))
+          for rec in out:
+              print(json.dumps({k: rec.get(k) for k in ('path','bytes','parsed_rows','first_timestamp','last_timestamp')}, sort_keys=True))
+          PY
+      - name: Upload compact audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: frd-mnq-public-sample-audit
+          path: |
+            artifacts/receipt.json
+            artifacts/audit.log
+            artifacts/zip.sha256
+            artifacts/zip-list.txt
+          if-no-files-found: error
+          retention-days: 30
