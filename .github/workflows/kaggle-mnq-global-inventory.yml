@@ -1,0 +1,79 @@
+name: Kaggle MNQ global inventory
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/kaggle-mnq-global-inventory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Query bounded Kaggle public dataset searches
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python - <<'PY' | tee artifacts/inventory.log
+          import json, urllib.parse, urllib.request
+          from pathlib import Path
+
+          searches=['MNQ','MNQ futures','Micro E-mini Nasdaq']
+          found={}
+          receipts=[]
+          for query in searches:
+              params={'search':query,'page':'1','pageSize':'100','sortBy':'updated'}
+              url='https://www.kaggle.com/api/v1/datasets/list?'+urllib.parse.urlencode(params)
+              with urllib.request.urlopen(url, timeout=30) as r:
+                  rows=json.loads(r.read().decode('utf-8'))
+              if not isinstance(rows,list):
+                  raise SystemExit('unexpected Kaggle payload for '+query)
+              receipts.append({'query':query,'url':url,'result_count':len(rows)})
+              for row in rows:
+                  ref=str(row.get('ref') or '')
+                  title=str(row.get('title') or '')
+                  subtitle=str(row.get('subtitle') or '')
+                  hay=(ref+' '+title+' '+subtitle).lower()
+                  if not ('mnq' in hay or ('micro' in hay and 'nasdaq' in hay)):
+                      continue
+                  found[ref]={
+                      'ref':ref,
+                      'title':title,
+                      'subtitle':subtitle,
+                      'lastUpdated':row.get('lastUpdated'),
+                      'downloadCount':row.get('downloadCount'),
+                      'totalBytes':row.get('totalBytes'),
+                      'licenseName':row.get('licenseName'),
+                      'url':row.get('url'),
+                      'ownerRef':row.get('ownerRef'),
+                  }
+          items=sorted(found.values(),key=lambda x:x['ref'])
+          receipt={
+              'schema':'research_runner.kaggle_mnq_global_inventory.v1',
+              'queries':receipts,
+              'candidate_count':len(items),
+              'candidates':items,
+              'research_only':True,
+              'admission_authority':False,
+          }
+          Path('artifacts/receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          print('KAGGLE_MNQ_GLOBAL_INVENTORY=PASS')
+          print('CANDIDATE_COUNT='+str(len(items)))
+          for item in items:
+              print(json.dumps(item,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-mnq-global-inventory
+          path: |
+            artifacts/receipt.json
+            artifacts/inventory.log
+          if-no-files-found: error
+          retention-days: 30
